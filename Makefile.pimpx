@@ -1,0 +1,78 @@
+######
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+# Makefile: Makefile for shufflestat
+# (c) 2001 Ask Solem Hoel <ask@unixmonks.net>
+#
+#   This program is free software; you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License version 2,
+#   *NOT* "earlier versions", as published by the Free Software Foundation.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program; if not, write to the Free Software
+#   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+#####
+
+#%require "config.pimpx"
+
+#%print PREFIX=%{WITH_PREFIX}
+#%print PIMPX=%{WITH_PIMPX}
+#%print PIMPX_FLAGS=%{WITH_PIMPXFLAGS}
+#%print PERL=%{WITH_PERL}
+#%print PERLFLAGS=%{WITH_PERLFLAGS}
+#%print CONFIGFILE=%{WITH_CONFIGFILE}
+#%print INCLUDE=%{WITH_INCLUDE}
+
+all: init includes bin
+
+install: all init_dirs includes_install bin_install cf_install installdoc
+
+init:
+	test -d build/ || mkdir build/
+
+includes:
+	$(PIMPX) $(PIMPXFLAGS) -Iinclude/ include/StatDB.pm.pimpx -Obuild/StatDB.pm
+	$(PIMPX) $(PIMPXFLAGS) -Iinclude/ include/config.ph.pimpx -Obuild/config.ph
+
+bin:
+	$(PIMPX) $(PIMPXFLAGS) -Ishufflstat/ shufflestat/shufflestat.pimpx -Obuild/shufflestat
+	$(PIMPX) $(PIMPXFLAGS) -Iss2html/ ss2html/ss2html.pimpx -Obuild/ss2html
+	$(PIMPX) $(PIMPXFLAGS) -Ibuildindex/ buildindex/buildindex.pimpx -Obuild/buildindex
+
+init_dirs:
+	test -d $(PREFIX)/bin || mkdir $(PREFIX)/bin
+	test -d $(PREFIX)/doc || mkdir $(PREFIX)/doc
+	test -d $(PREFIX)/etc || mkdir $(PREFIX)/etc
+	test -d $(PREFIX)/db  || mkdir $(PREFIX)/db
+	test -d $(PREFIX)/html|| mkdir $(PREFIX)/html
+	test -d $(PREFIX)/etc/templates || mkdir $(PREFIX)/etc/templates
+	test -d $(PREFIX)/include || mkdir $(PREFIX)/include
+
+includes_install:
+	cp -f build/StatDB.pm $(INCLUDE)/
+	cp -f build/config.ph $(INCLUDE)/
+
+bin_install:
+	cp -f build/shufflestat $(PREFIX)/bin/shufflestat
+	cp -f build/ss2html $(PREFIX)/bin/ss2html
+	cp -f build/buildindex $(PREFIX)/bin/buildindex
+	chmod 750 $(PREFIX)/bin/shufflestat $(PREFIX)/bin/ss2html $(PREFIX)/bin/buildindex
+
+cf_install:
+	test -f $(CONFIGFILE) || cp shufflestat.cf $(CONFIGFILE)
+	cp -f templates/*.sstmpl $(PREFIX)/etc/templates
+
+installdoc:
+	sh ./gendoc.sh $(PREFIX)
+
+clean:
+	rm -f *.o core
+	rm -rf build/
+
+distclean: clean
+	rm config.cache config.pimpx Makefile

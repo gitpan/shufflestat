@@ -1,0 +1,116 @@
+#!/usr/bin/perl
+#% include "config.pimpx"
+#% ifdef WITH_PERL
+#%   print #!%WITH_PERL %WITH_PERLFLAGS
+#% endif
+
+use strict;
+#% ifdef WITH_INCLUDE
+#%   print use lib "%{WITH_INCLUDE}";
+#% endif
+use vars qw($basename);
+use Cwd;
+require "config.ph";
+
+#% ifdef WITH_PREFIX
+#%   print my $PREFIX = '%{WITH_PREFIX}';
+#% else
+my $PREFIX = '/';
+#% endif
+chdir $PREFIX;
+
+# prototypes
+sub error($);
+sub warning($);
+
+# Remove path part from programname.
+($basename = $0) =~ s%.*/%%;
+
+# read configuration
+my $config = getconfig()
+    or error "Couldn't read config. ".
+    "Please examine configfile path and permissions";
+
+# We change the month names to numbers.
+my @months = qw(Jan Feb Mar Apr May Jun
+				Jul Aug Sep Oct Nov Dec
+);
+
+my $outdir = $config->{general}{outdir};
+my $files = get_html_files($outdir);
+
+my $index_page  = include_file($config->{general}{index_header});
+foreach my $year (sort {$a <=> $b} keys %$files) {
+	$index_page .= qq{
+	<table border=0 width="40%">
+	<tr>
+		<th><div align="left"><big><big>$year</big></big></div></th>
+	</tr>
+	</table>
+	};
+	foreach my $month (sort {$a <=> $b} keys %{$files->{$year}}) {
+		$index_page .= "<b>$months[$month]</b>: ";
+		my $daycount = scalar keys %{$files->{$year}{$month}};
+		my $curday = 0;	
+		foreach my $day (sort {$a <=> $b||$a cmp $b} keys %{$files->{$year}{$month}}) { $curday++;
+			$index_page .= "&nbsp;<a href=\"$files->{$year}{$month}{$day}\">$day</a>";
+			unless($curday >= $daycount) {
+				$index_page .+ " <b>|</b>";
+			}
+		}
+		$index_page .= "<br/>";
+	}
+};
+
+$index_page .= include_file($config->{general}{index_footer});
+open(INDEX, ">$outdir/index.html") 
+	or error "Couldn't open $outdir/index.html for writing: $!";
+print INDEX $index_page;
+close(INDEX);
+
+sub get_html_files {
+	my($topdir) = @_;
+	my $curdir = cwd;
+	my %htmlfiles;
+	opendir(TOPDIR, $topdir)
+		or error "Can't open dir $topdir: $!";
+	YEAR:
+	while(my $year = readdir(TOPDIR)) {
+		my $yearpath = "$topdir/$year";
+		if(-d $yearpath && $year =~ /^\d\d\d\d$/) {
+			opendir(YEARDIR, $yearpath)
+				or warning "Can't open dir $yearpath: $!", next YEAR;
+			MONTH:
+			while(my $month = readdir(YEARDIR)) {
+				my $monthpath = "$topdir/$year/$month";
+				if(-d $monthpath && $month =~ /^\d\d$/) {
+					opendir(MONTHDIR, $monthpath) 
+						or warning "Can't open dir $monthpath: $!", next MONTH;
+					DAY:
+					while(my $day = readdir(MONTHDIR)) {
+						my $daypath = "$topdir/$year/$month/$day";
+						if(-f $daypath && $day =~ /\.html$/) {
+							my $stripsuffix = $day;
+							$stripsuffix =~ s/\.html$//;
+							$htmlfiles{$year}{$month}{$stripsuffix} = "$year/$month/$day";
+						}
+					}
+				}
+			}
+		}
+	}
+	return \%htmlfiles;
+
+}
+
+sub include_file {
+	my($file) = @_;
+	open(FILE, $file) or warning "Couldn't open included file $file: $!";
+	my $content; {
+		local $/ = undef;
+		$content = <FILE>;
+	}
+	close(FILE);
+	return $content;
+}
+		

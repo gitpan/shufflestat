@@ -1,0 +1,40 @@
+# ####
+# stats.pl configuration file
+
+general {
+	template			etc/templates/startsiden.sstmpl;
+	index_header		etc/templates/index_head.sstmpl;
+	index_footer		etc/templates/index_foot.sstmpl;
+	outdir				html/;
+}
+
+options {
+	count_exclude_sizes yes;
+}
+
+database {
+	timedb				db/time.db;
+	ipdb				db/ip.db;
+	statusdb			db/status.db;
+	pagedb				db/page.db;
+}
+
+excludeAtParse {
+	addr				195.159.135.124;
+	suffix 				.gif .jpeg .jpg .png 
+						.ico .avi .xbm .mpeg 
+						.zip .class .rm .ram
+						.css .RealMeida .au
+						.swf webmeasure.html
+						.pl search.cgi
+						checkdomain.cgi
+			
+		;
+	preg 				http:\/\/
+						go\?id
+						\/sokm\?location
+						\/sokm\?search
+						Sponsorbutton
+		;
+	statuscode 			408;
+}

@@ -1,0 +1,153 @@
+#!/usr/bin/perl
+#% include "config.pimpx"
+#% ifdef WITH_PERL
+#%   print #!%WITH_PERL %WITH_PERLFLAGS
+#% endif
+
+use strict;
+#% ifdef WITH_INCLUDE
+#%   print use lib "%{WITH_INCLUDE}";
+#% endif
+use StatDB;
+use vars qw($basename);
+require "config.ph";
+
+#% ifdef WITH_PREFIX
+#%   print my $PREFIX = '%{WITH_PREFIX}';
+#% else
+my $PREFIX = '/';
+#% endif
+chdir $PREFIX;
+
+# prototypes
+sub error($);
+sub warning($);
+
+# Remove path part from programname.
+($basename = $0) =~ s%.*/%%;
+
+# read configuration
+my $config = getconfig()
+    or error "Couldn't read config. ".
+    "Please examine configfile path and permissions";
+
+# make sure a template is configured.
+unless($config->{general}{template}) {
+	error "Cannot continue without a template. Please reconfigure.";
+}
+# make sure the template is there
+unless(-f $config->{general}{template}) {
+	error "Cannot fetch template: $!";
+}
+
+# create a new StatDB object.
+my $db = StatDB::new(
+    timedb      => $config->{database}{timedb},
+    ipdb        => $config->{database}{ipdb},
+    pagedb      => $config->{database}{pagedb},
+    statusdb    => $config->{database}{statusdb},
+);
+
+# Open database files and init.
+$db->startsession() or error $db->error();
+my $times 		= $db->fetch_times();
+
+warn "Fetching data... This will take some time...\n";
+my $fetchobj 	= $db->fetch_all();
+my $kB 			= b_to_kB($fetchobj->{total_size}). 'kB';
+my $MB 			= b_to_MB($fetchobj->{total_size}). 'MB';
+my $GB 			= b_to_GB($fetchobj->{total_size}). 'GB';
+my $per_hour = $fetchobj->{per_hour};
+$db->endsession();
+
+my $foundtime = undef;
+for(my $i = 0; $i < $#$times; $i++) {
+	if($times->[$i]->[0] && $times->[$i]->[1] && $times->[$i]->[2]) {
+		$foundtime = $i;
+		last;
+	}
+}
+error "Missing time from db" unless defined $foundtime;
+my $time_start 	= StatDB::sprint_time($times->[$foundtime]);
+my $time_end	= StatDB::sprint_time($times->[$#$times]);
+
+# ### CREATE VARIABLES FOR THE TEMPLATE
+my %templ_vars = (
+	time_start	=> $time_start,
+	time_end	=> $time_end,
+	total_hits	=> $fetchobj->{total_hits},
+	total_size	=> $fetchobj->{fetch_size},
+	total_200	=> $fetchobj->{total_200},
+	total_404	=> $fetchobj->{total_404},
+	total_ips	=> $fetchobj->{total_ips},	
+	total_kb	=> $kB,
+	total_mb	=> $MB,
+	total_gb	=> $GB,	
+);
+# Create total_hour_0..23 => $per_hour->[0..23];
+foreach(0..23) {
+	my $twodigit = sprintf('%.2d', $_);
+	eval "\$templ_vars{total_hour_$twodigit} = \$per_hour->[$_];";
+}
+# ########################
+
+
+my $destdir = "html/$times->[$foundtime]->[0]/$times->[$foundtime]->[1]";
+my $outfile = "$destdir/$times->[$foundtime]->[2].html";
+print "Writing page $outfile...\n";
+
+my $page = get_process_template($config->{general}{template}, %templ_vars);
+mkdir_recursive($destdir); 
+write_page($page, $outfile);
+
+print "Done :)\n";
+
+sub get_process_template {
+	my($template, %templ_vars) = @_;
+	my $out;
+	open TEMPLATE, $config->{general}{template}
+		or error "Couldn't open template file: '$config->{general}{template}': $!";
+	# Foreach line in the template file...
+	LINE: while(<TEMPLATE>) {
+		# ...while the line contains an @ character...
+		VARS: while(index($_, '@' != -1)) {
+			# ...if the line contains an @@VARIABLE_KEY@@...
+			if(m/\@([\w\d_]+)\@/) {
+				# ...translate that to the variable data, not case sensitive...	
+				my $varkey = $1;
+				my $lcvarkey = lc $varkey;
+				s/\@$varkey\@/$templ_vars{$lcvarkey}/;
+
+				# Give a warning if the variable key doesn't exist or is not defined.
+				# but don't stop processing, just leave the variable data blank.
+				unless(exists $templ_vars{$lcvarkey}) {
+					warn "Unknown macro: $varkey\n";
+				}
+				unless(defined $templ_vars{$lcvarkey}) {
+					warn "Empty macro variable: $varkey\n";
+				}
+			}
+			else {
+				last VARS;
+			}
+		}
+		$out .= $_;
+	}
+	close(TEMPLATE);
+	return $out;
+}
+
+sub write_page {
+	my($pagedata, $outfile) = @_;
+	error "WARNING! $outfile is a symbolic link,
+		possible race attempt detected." if -l $outfile;
+
+	open OUT, ">$outfile"
+		or error "Couldn't open output file for writing: $!\n";
+	print OUT $pagedata;
+	close(OUT);
+	return 1;
+}
+
+# ########################### <---<>---> ########################### #
+__END__

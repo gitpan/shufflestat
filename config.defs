@@ -1,0 +1,7 @@
+PREFIX=/opt/shufflestat
+PERL=/usr/bin/perl
+PERLFLAGS=
+PIMPX=/usr/local/bin/pimpx
+PIMPXFLAGS=
+CONFIGFILE=$PREFIX/etc/shufflestat.cf
+INCLUDE=$PREFIX/include/

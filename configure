@@ -1,0 +1,113 @@
+#!/bin/bash
+######
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+# configure: configure script for shufflestat
+# (c) 2001 Ask Solem Hoel <ask@unixmonks.net>
+#
+#   This program is free software; you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License version 2,
+#   *NOT* "earlier versions", as published by the Free Software Foundation.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program; if not, write to the Free Software
+#   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+#####
+
+if [ -f config.defs ]; then
+	. ./config.defs
+fi
+
+if [ -f config.cache ]; then
+	. ./config.cache
+fi
+
+echo "Configuring for shufflestat..."
+
+for arg in $* ; do
+	case $arg in
+		--prefix=*)
+			PREFIX=`echo $arg | cut -d= -f2`
+		;;
+		--with-pimpx=*)
+			PIMPX=`echo $arg | cut -d= -f2`
+		;;
+		--with-pimpxflags=*)
+			PIMPFLAGS=`echo $arg | cut -d= -f2`
+		;;
+		--with-configfile=*)
+			CONFIGFILE=`echo $arg | cut -d= -f2`
+		;;
+		--with-perl=*)
+			PERL=`echo $arg | cut -d= -f2`
+		;;
+		--with-perlflags=*)
+			PERLFLAGS=`echo $arg | cut -d= -f2`
+		;;
+		--with-include=*)
+			INCLUDE=`echo $arg | cut -d= -f2`
+		;;
+	esac
+done
+
+echo "  prefix.................. $PREFIX"
+if [ ! -d "$PREFIX" ]; then
+	echo "Error: prefix does not exist. Please create it with \`mkdir -p $PREFIX' first"
+	echo "or you can select another prefix with the --with-prefix=<my-prefix> option to configure"
+	exit 1;
+fi
+echo "  pimpx................... $PIMPX"
+if [ ! -x "$PIMPX" ]; then
+	echo "Error: Couldn't find $PIMPX. Please fetch it from http://www.unixmonks.net/pimpx and install"
+	echo "If you know you have pimpx installed, specify it's location with the --with-pimpx option."
+	exit 1;
+fi
+if [ -z "$PIMPXFLAGS" ]; then
+	echo "  pimpxflags.............. <none>"
+else
+	echo "  pimpxflags.............. $PIMPXFLAGS"
+fi
+echo "  configfile.............. $CONFIGFILE"
+echo "  include................. $INCLUDE"
+echo "  perl.................... $PERL"
+if [ ! -x "$PERL" ]; then
+	echo "Error: perl is not installed at $PERL. Please specify it's location with the --with-perl option";
+	exit 1;
+fi
+if [ -z "$PERLFLAGS" ]; then
+	echo "  perlflags............... <none>"
+else
+	echo "  perlflags............... $PERLFLAGS"
+fi
+
+echo "Writing config.pimpx..."
+
+cat << EOF > config.pimpx
+	#%define WITH_PREFIX "$PREFIX"
+	#%define WITH_PIMPX "$PIMPX"
+	#%define WITH_PIMPXFLAGS "$PIMPX_FLAGS"
+	#%define WITH_CONFIGFILE "$CONFIGFILE"
+	#%define WITH_PERL "$PERL"
+	#%define WITH_PERLFLAGS "$PERLFLAGS"
+	#%define WITH_INCLUDE "$INCLUDE"
+EOF
+
+echo "Writing config.cache..."
+echo << EOF > config.cache
+	PREFIX=$PREFIX
+	PERL=$PERL
+	PERLFLAGS=$PERLFLAGS
+	PIMPX=$PIMPX
+	PIMPXFLAGS=$PIMPXFLAGS
+	CONFIGFILE=$CONFIGFILE
+	INCLUDE=$INCLUDE
+EOF
+echo "Writing Makefile..."
+$PIMPX Makefile.pimpx > Makefile
+
+echo "\`--- All done :-)" 

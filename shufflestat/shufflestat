@@ -1,0 +1,367 @@
+#!/usr/bin/perl
+#% include "config.pimpx"
+#% ifdef WITH_PERL
+#%   print #!%WITH_PERL %WITH_PERLFLAGS
+#% endif
+# <------------------------------ - -  - -    -     -       -          -
+# Program: shufflestat
+#
+# Description:
+#   Gather statistics from apache logfiles and store summary of each hour
+#   in a series BerkeleyDB DBM files.
+#
+# Files:
+#   Configuration file defined in $CONFIGFILE
+#
+# Environment:
+#   $QUIET - print nothing to stdout if set true
+#
+# Depends on:
+#   StatDB.pm and a configuration file.
+#
+# Bugs/Missing features:
+#   Logformat is not configurable. (uses apache common)
+#
+# Author: Ask Solem Hoel <ask@startsiden.no>
+#
+################################################################
+
+use strict;
+#% ifdef WITH_INCLUDE
+#%   print use lib "%{WITH_INCLUDE}";
+#% endif
+use StatDB;
+use vars qw($QUIET $Q $basename $linecount);
+require "config.ph";
+$|++;
+
+# -############## Configuration
+
+# number of fields in a entry for a entry to be valid.
+  my $REQ_NUM_FIELDS = 7;
+#
+
+# default server name
+  my $DEFAULT_SERVER_NAME = 'ws01';
+
+# Set to 1 for no output to stdout.
+$QUIET = $Q = $ENV{QUIET};
+
+#% ifdef WITH_PREFIX
+#% print my $PREFIX = "%{WITH_PREFIX}";
+#% else
+my $PREFIX = '/';
+#% endif
+chdir $PREFIX;
+
+# ########################### MAIN ################################# #
+
+# prototypes
+sub error($);
+sub warning($);
+
+sub ENTRY_OK        {200};          # Entry is valid.
+sub ENTRY_INVALID   {300};          # Entry is invalid.
+sub ENTRY_MISSING   {400};          # No entry?
+sub ENTRY_IGNORE    {500};          # Entry was ignored by user.
+
+# Can be set with the -s command line option.
+my $SERVER = $DEFAULT_SERVER_NAME;
+
+# We change the month names to numbers.
+my %months = qw(Jan 01 Feb 02 Mar 03 Apr 04 
+                May 05 Jun 06 Jul 07 Aug 08
+                Sep 09 Oct 10 Nov 11 Dec 12
+);
+
+# Remove path part from programname.
+($basename = $0) =~ s%.*/%%;
+
+chdir $PREFIX;
+
+# read configuration
+my $config = getconfig()
+    or error "Couldn't read config. ".
+    "Please examine configfile path and permissions";
+
+# try to get a custom servername from commandline options.
+if(defined $ARGV[0] and $ARGV[0] eq '-s')
+{
+    shift @ARGV;
+    $SERVER = shift @ARGV;
+}
+die "Usage: \`$basename [-s servername] logfiles'\n" unless defined $ARGV[0];
+
+# create a new StatDB object.
+my $db = StatDB::new(
+    timedb      => $config->{database}{timedb},
+    ipdb        => $config->{database}{ipdb},
+    pagedb      => $config->{database}{pagedb},
+    statusdb    => $config->{database}{statusdb},
+);
+
+# Open database files and init.
+$db->startsession() or error $db->error();
+
+FILE:
+foreach my $file (@ARGV) {
+    # remove redirects and pipes etc from filename.
+    # just to be on the safe side.
+    $file =~ s/[<>|;]//g;
+
+    unless(open FH, "<$file") {
+        warning "Skipping file: $file: $!";
+        next FILE;
+    }
+
+    $linecount      = 0;    # total/current lines in file.
+    my $en_ok       = 0;    # total/current OK entries.
+    my $en_invalid  = 0;    # total/current invalid entries.
+    my $en_ignored  = 0;    # total/current ignored entries.
+    my $size        = 0;    # total/current size of requested documents.
+    my $status_bar  = undef;# status bar string.
+    my $hour        = 0;
+    my $did         = 0;
+    while(<FH>) { $linecount++;
+        chomp;
+        next unless length;
+
+        # Get the logentry object.
+        my $hr_entry = logentry_parse_common($_);
+
+        if($hr_entry->{status} == ENTRY_OK) {
+            # if no document was passed (i.e on a 404), a dash is
+            # sent instead of 0bytes.
+            if($hr_entry->{doc_size} ne '-') {
+                $size += $hr_entry->{doc_size};
+            } else {
+				$hr_entry->{doc_size} = 0;
+			}
+            # dont fetch id from db if we're still in the same hour of day.
+            #if($hour != $hr_entry->{hour}) {
+                $hour = $hr_entry->{hour};
+                # ###
+                # will return existing id if an entry with this timestamp
+                # already exists.
+                $did = $db->insert_new_timestamp($hr_entry->{req_time});
+            #}
+            $db->insert_page($hr_entry->{url}, $did, $SERVER, $hr_entry->{doc_size});
+            $db->insert_status($hr_entry->{http_status}, $did, $SERVER);
+            $db->insert_ip($hr_entry->{remote_addr}, $did, $SERVER);
+            $en_ok++;
+        }
+        else {
+            if($hr_entry->{status} == ENTRY_IGNORE) {
+                if(defined $config->{options}{count_exclude_sizes}) {
+                    if($config->{options}{count_exclude_sizes} eq 'yes') {
+                        if($hr_entry->{doc_size} ne '-') {
+                            $size += $hr_entry->{doc_size};
+                        }
+                    }
+                }
+                $en_ignored++;
+            }
+            else {
+                $en_invalid++;
+            }
+        }
+
+        # #### STATUS BAR #### #
+        unless($Q) {
+            $status_bar = sprintf(
+                "Line: %d Entries: %d Invalid: %d Ignored: %d Size: %d/kB, %.2f/MB, %.2f/GB",
+                $linecount, $en_ok, $en_invalid, $en_ignored, 
+                $size / 1024, 
+                $size / 1_048_576, # MB
+                $size / 1_073_741_824 # GB
+            );
+            print $status_bar;
+            print "\x08" x length $status_bar;
+            # #################### #
+        }
+    }
+    # to keep the status bar onscreen when program has quit.
+    print $status_bar, "\n" unless $Q;
+}
+
+# close the tied DBM handles.
+$db->endsession();
+
+# ########################### FUNCTIONS ############################ #
+
+# ### hashref logentry_parse_common(string line)
+# Description:
+#   Parse a logentry line and extract the different elements
+#   to a logentry "struct", see the return statement at the end
+#   of this function for comments on the datastructure of 
+#   this structure.
+# 
+# Depends on global variables:
+#   $config     Configuration hashref from main::getconfig();
+#   %month      Month conversion table
+#
+sub logentry_parse_common {
+    my($line) = (@_);
+    my $strlen = length $line;
+
+    my @fields;
+    my $cur_elno = 0; # current element in fields
+    my $in_quote = 0; # inside quote
+    my $in_brack = 0; # inside bracket.
+    my $chr_count = -1;
+    $line =~ tr/'//d;
+    $line =~ tr/`//d;
+    $line =~ tr/\\//d;
+    foreach my $chr (split//, $line) { $chr_count++;
+        if($chr eq '"') {
+            # End a quote if in a quote, start a quote otherwise.
+            $in_quote = $in_quote ? 0 : 1;
+        }
+        elsif($chr eq '[') {
+            # Start a bracket if we're not already in a bracket.
+            unless($in_brack) {
+                $in_brack = 1;
+            } else {
+                $fields[$cur_elno] .= $chr;
+            }
+        }
+        elsif($chr eq ']') {
+            # End a bracket if we're in a bracket.
+            if($in_brack) {
+                $in_brack = 0;
+            } else {
+                $fields[$cur_elno] .= $chr;
+            }
+        }
+        elsif($chr eq ' ' or $chr_count >= $strlen) {
+            # ###
+            # Space is the separator if we're not in a bracket nor quote.
+            # Start a new element if this is true.
+            unless($in_quote or $in_brack) {
+                $cur_elno++;
+            } else {
+                $fields[$cur_elno] .= $chr;
+            }
+        }
+        else {
+            $fields[$cur_elno] .= $chr;
+        }
+    }
+
+    my $status = ENTRY_OK; # ok as default.
+    my($cmd, $path, $version) = split(/\s+/, $fields[4], 3);
+    unless($cmd eq 'GET' or $cmd eq 'POST') {
+        $status = ENTRY_IGNORE;
+    }
+
+    ###################################################
+    # run user-defined checks (if any)
+    if(defined $config->{excludeAtParse}{addr}) {
+        addr: foreach my $ex_addr (split /\s+/, $config->{excludeAtParse}{addr}) {
+            $ex_addr = quotemeta $ex_addr;
+            if($fields[0] =~ /$ex_addr/i) {
+                $status = ENTRY_IGNORE;
+                last addr;
+            }
+        }
+    }
+    if($path and defined $config->{excludeAtParse}{suffix}) {
+        sfx: foreach my $ex_sfx (split /\s+/, $config->{excludeAtParse}{suffix}) {
+            $ex_sfx = quotemeta $ex_sfx;
+            if($path =~ /$ex_sfx$/i) {
+                $status = ENTRY_IGNORE;
+                last sfx;
+            }
+        }
+    }
+    if($path and defined $config->{excludeAtParse}{preg}) {
+        preg: foreach my $ex_preg (split /\s+/, $config->{excludeAtParse}{preg}) {
+            if($path =~ /$ex_preg/) {
+                $status = ENTRY_IGNORE;
+                last preg;
+            }
+        }
+    }
+    if($fields[5] and defined $config->{excludeAtParse}{statuscode}) {
+        sc: foreach my $ex_sc (split /\s+/, $config->{excludeAtParse}{statuscode}) {
+            if($ex_sc =~ /^\d+$/) {
+                if($fields[5] == $ex_sc) {
+                    $status = ENTRY_IGNORE;
+                    last sc;
+                }
+            }
+        }
+    }
+                
+    if(! @fields) {
+        $status = ENTRY_MISSING;
+    }
+    elsif(scalar @fields < $REQ_NUM_FIELDS) {
+        $status = ENTRY_INVALID;
+    }
+
+    unless($path) {
+        # must've requested a document
+        $status = ENTRY_INVALID;
+    }
+
+    # convert the date to postgres++ timestamp.
+    $fields[3] =~ /(\d\d)\/(\w+)\/(\d\d\d\d):(\d\d):(\d\d):(\d\d)\s+([-+])(\d\d\d\d)/;
+    my($d, $m, $y, $h, $min, $sec, $pm, $zone) =
+        ($1, $2, $3, $4, $5, $6, $7, $8)
+    ;
+    $pm ||= "+";
+    $m = $months{$m};
+    $fields[3] = sprintf("%.4d-%.2d-%.2d %.2d:00:00%s%.2d",
+        $y, $m, $d, $h, $pm, $zone
+    );
+
+    # ###
+    # return our logentry "struct"
+    return {
+        status      => $status,    # status of this entry (ENTRY_(MISSING|INVALID|OK))
+        remote_addr => $fields[0], # remote address (IP address/DNS hostname)
+        ident       => $fields[1], # RFC1413 identity
+        http_user   => $fields[2], # http user id
+        req_time    => $fields[3], # the time of request
+                                   #   format: [2day/2month/4year:2hour:2minute:2second zone]
+                                   #   where zone is: (+|-)\d{4}
+        request     => $fields[4], # the request itself.
+        hour        => $h,          
+        http_status => $fields[5], # the response code, see RFC2616:section 10
+        doc_size    => $fields[6], # the size of the document. if nothing was sent, it's set to a dash.
+        url         => $path,      # url fetched
+        cmd         => $cmd,
+        version     => $version,
+    }
+}
+
+# ### void error(string error);
+# Description:
+#   Print error message to STDERR and exit program.
+# 
+# Depends on global variable:
+#   $basename   Basename of programname.
+#
+sub error($) {
+    my($error) = @_;
+    printf(STDERR "%s: Error: %s\n", $basename, $error);
+    exit 1;
+}
+
+# ### int warning(string warning);
+# Description:
+#   Print warning message to STDERR
+# 
+# Depends on global variable:
+#   $basename   Basename of programname.
+#
+sub warning($) {
+    my($warning) = @_;
+    printf(STDERR "%s: Warning: %s\n", $basename, $warning);
+    return 1;
+}
+
+# ########################### <---<>---> ########################### #
+__END__
+mmm... skyskraper, i love you!
